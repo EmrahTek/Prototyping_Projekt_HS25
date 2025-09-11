@@ -8,126 +8,115 @@ Version: V1.0
 Date: 09.09.2025
 
 */
-
-
-
-
-#include <DFRobot_DHT20.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
 #include <Wire.h>
 
+Adafruit_MPU6050 mpu;
 
+// --- Adjust these for your wiring ----
+#ifndef SDA_PIN
+#define SDA_PIN 21 // FireBeetle ESP32 V4: generel GPIO21
+#endif
+#ifndef SCL_PIN
+#define SCL_PIN 22 // FireBeetle ESP32 Vç: generel GPIO22
+#endif
 
+// If AD0=GND -> 0x68, if AD0=3V3 -> 0x69
+//uint8_t MPU_ADDR = 0x68;   
 
 // FireBeetle ESP32 V4.0 LED + Hello World
-# define SDA_PIN 21
-# define SCL_PIN 22
 # define LED_PIN 2 // GPIO2 
-
-
-// AD0=GND -> 0x68, AD0=VCC -> 0x69
-uint8_t MPU_ADDR = 0x68;
-
-// MPU6050 register addresses
-#define REG_PWR_MGMT_1   0x6B
-#define REG_SMPLRT_DIV   0x19
-#define REG_CONFIG       0x1A
-#define REG_GYRO_CONFIG  0x1B
-#define REG_ACCEL_CONFIG 0x1C
-#define REG_ACCEL_XOUT_H 0x3B
-
-// Sensitivity scale factors (from datasheet)
-const float ACCEL_SENS_2G = 16384.0f; // LSB/g
-const float GYRO_SENS_250 = 131.0f;   // LSB/(deg/s)
-void i2cWrite8(uint8_t dev, uint8_t reg, uint8_t val) {
-  Wire.beginTransmission(dev);
-  Wire.write(reg);
-  Wire.write(val);
-  Wire.endTransmission();
-}
-
-void i2cReadBytes(uint8_t dev, uint8_t reg, uint8_t *buf, uint8_t len) {
-  Wire.beginTransmission(dev);
-  Wire.write(reg);
-  Wire.endTransmission(false); // repeated start
-  Wire.requestFrom((int)dev, (int)len, (int)true);
-  for (uint8_t i = 0; i < len && Wire.available(); i++) {
-    buf[i] = Wire.read();
-  }
-}
-int16_t toInt16(uint8_t hi, uint8_t lo) {
-  return (int16_t)((hi << 8) | lo);
-}
-
-void i2cScan() {
-  Serial.println(F("I2C address scan:"));
-  for (uint8_t addr = 1; addr < 127; addr++) {
-    Wire.beginTransmission(addr);
-    uint8_t err = Wire.endTransmission();
-    if (err == 0) {
-      Serial.print(F(" - Device found at 0x"));
-      Serial.println(addr, HEX);
-    }
-  }
-}
-
-bool mpuInit() {
-  // Wake up device (clear sleep bit)
-  i2cWrite8(MPU_ADDR, REG_PWR_MGMT_1, 0x00);
-  delay(100);
-
-  // DLPF = 3 (≈44 Hz accel / 42 Hz gyro), reduces noise
-  i2cWrite8(MPU_ADDR, REG_CONFIG, 0x03);
-
-  // Gyro range: ±250 dps
-  i2cWrite8(MPU_ADDR, REG_GYRO_CONFIG, 0x00);
-
-  // Accel range: ±2g
-  i2cWrite8(MPU_ADDR, REG_ACCEL_CONFIG, 0x00);
-
-  // Sample rate: 1 kHz / (1 + 9) = 100 Hz
-  i2cWrite8(MPU_ADDR, REG_SMPLRT_DIV, 9);
-
-  // Simple check: first read attempt
-  uint8_t test[2] = {0};
-  i2cReadBytes(MPU_ADDR, REG_ACCEL_XOUT_H, test, 2);
-  return Wire.available() == 0;
-}
-
-
-
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  while (!Serial)
+    delay(10); // will pause Zero, Leonardo, etc until serial console opens
+
+  Serial.println("Adafruit MPU6050 test!");
+
+  // Try to initialize!
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {
+      delay(10);
+    }
+  }
+  Serial.println("MPU6050 Found!");
 
   pinMode(LED_PIN, OUTPUT);
 
-  
-  // Initialize I2C bus at 400 kHz
+
+
+/*
+  //Start I2C with explicit pins & 400kHz
   Wire.begin(SDA_PIN, SCL_PIN, 400000);
-  delay(50);
 
-  i2cScan();
+  Serial.println("\nMPU6050 init...");
 
-  // If 0x68 not found, try 0x69
-  Wire.beginTransmission(MPU_ADDR);
-  if (Wire.endTransmission() != 0) {
+  // Try to initalize (Provide address & bus & i2c clock)
+  if (!mpu.begin(MPU_ADDR, &Wire, 400000)){
+    Serial.println("Failed to find MPU6050 chip at 0x68. Trying 0x69...");
+    // Fallback
     MPU_ADDR = 0x69;
-    Serial.println(F("0x68 not found, trying 0x69..."));
-  }
+    if(!mpu.begin(MPU_ADDR, &Wire, 400000)){
+      Serial.println("MPU6050 nor found at 0x69. Check wiring & power. ");
+      // I2C scanner tipp:
+      Serial.println("Tipp: Run an I2C scanner to verify address.");
+      while(1){delay(1000);}
+    }
+  } */
 
-  if (!mpuInit()) {
-    Serial.print(F("MPU initialized, address: 0x"));
-    Serial.println(MPU_ADDR, HEX);
-  } else {
-    Serial.println(F("MPU init may have failed (check wiring/address)."));
-  } 
+ // Serial.print("MPU6050 Found at 0x");
+  // Serial.println(MPU_ADDR, HEX);
+
+ // mpu.setAccelerometerRange(MPU6050_RANGE_8_G); //Acceleration range = sets how much g it can measure.
+ //  mpu.setGyroRange(MPU6050_RANGE_500_DEG); // Gyroscope range = sets how fast it can measure turns.
+ //  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ); // Filter bandwidth = adjusts the noise/response time balance.
+
+  // Print effective settings
+  //************************************************************//
+  /*This code only exists to show the user what the setting is.
+    It checks the sensor and prints for debug purposes to see 
+    if the correct range is selected.*/
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  Serial.print("Accelerometer range set to: ");
+  switch (mpu.getAccelerometerRange()){
+    case MPU6050_RANGE_2_G: Serial.println("+/- 2G"); break; 
+    case MPU6050_RANGE_4_G:  Serial.println("+/- 4G"); break;
+    case MPU6050_RANGE_8_G:  Serial.println("+/- 8G"); break;
+    case MPU6050_RANGE_16_G: Serial.println("+/-16G"); break;
+  }
+  //*********************************************************//
+  /*This code only writes information to the serial port for debug → 
+  "The measurement range of the gyroscope is currently set to ±XXX degrees/second." */
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  Serial.print("Gyro range set to: ");
+  switch (mpu.getGyroRange()) {
+    case MPU6050_RANGE_250_DEG:  Serial.println("+/- 250 deg/s"); break;
+    case MPU6050_RANGE_500_DEG:  Serial.println("+/- 500 deg/s"); break;
+    case MPU6050_RANGE_1000_DEG: Serial.println("+/-1000 deg/s"); break;
+    case MPU6050_RANGE_2000_DEG: Serial.println("+/-2000 deg/s"); break;
+  }
+  //*******************************************************//
+  /* This code only prints the value (in Hz) 
+  of the DLPF filter selected in the MPU6050 sensor to the serial port.*/
+  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+  Serial.print("Filter bandwidth set to: ");
+  switch (mpu.getFilterBandwidth()) {
+    case MPU6050_BAND_260_HZ: Serial.println("260 Hz"); break;
+    case MPU6050_BAND_184_HZ: Serial.println("184 Hz"); break;
+    case MPU6050_BAND_94_HZ:  Serial.println("94 Hz");  break;
+    case MPU6050_BAND_44_HZ:  Serial.println("44 Hz");  break;
+    case MPU6050_BAND_21_HZ:  Serial.println("21 Hz");  break;
+    case MPU6050_BAND_10_HZ:  Serial.println("10 Hz");  break;
+    case MPU6050_BAND_5_HZ:   Serial.println("5 Hz");   break;
+  }
+  //***********************************************************//
+  Serial.println("Setup OK.");
+  delay(100); 
 
 }  
-
-
-
-
 
 void loop() {
   digitalWrite(LED_PIN, HIGH);
@@ -140,56 +129,34 @@ void loop() {
   delay(1000);
 
 
+  /* Get new sensor events with the readings */
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
 
-  
-  uint8_t raw[14];
-  i2cReadBytes(MPU_ADDR, REG_ACCEL_XOUT_H, raw, 14);
+  /* Print out the values */
+  Serial.print("Acceleration X: ");
+  Serial.print(a.acceleration.x);
+  Serial.print(", Y: ");
+  Serial.print(a.acceleration.y);
+  Serial.print(", Z: ");
+  Serial.print(a.acceleration.z);
+  Serial.println(" m/s^2");
 
-  int16_t ax_raw = toInt16(raw[0], raw[1]);
-  int16_t ay_raw = toInt16(raw[2], raw[3]);
-  int16_t az_raw = toInt16(raw[4], raw[5]);
-  // int16_t temp_raw = toInt16(raw[6], raw[7]); // optional temperature
-  int16_t gx_raw = toInt16(raw[8], raw[9]);
-  int16_t gy_raw = toInt16(raw[10], raw[11]);
-  int16_t gz_raw = toInt16(raw[12], raw[13]);
+  Serial.print("Rotation X: ");
+  Serial.print(g.gyro.x);
+  Serial.print(", Y: ");
+  Serial.print(g.gyro.y);
+  Serial.print(", Z: ");
+  Serial.print(g.gyro.z);
+  Serial.println(" rad/s");
 
-  // Convert to physical units
-  float ax = ax_raw / ACCEL_SENS_2G; // g
-  float ay = ay_raw / ACCEL_SENS_2G; // g
-  float az = az_raw / ACCEL_SENS_2G; // g
+  Serial.print("Temperature: ");
+  Serial.print(temp.temperature);
+  Serial.println(" degC");
 
-  float gx = gx_raw / GYRO_SENS_250; // deg/s
-  float gy = gy_raw / GYRO_SENS_250; // deg/s
-  float gz = gz_raw / GYRO_SENS_250; // deg/s
-
-  // Print results
-  Serial.print(F("ACC [g] ax: ")); Serial.print(ax, 3);
-  Serial.print(F("  ay: "));       Serial.print(ay, 3);
-  Serial.print(F("  az: "));       Serial.print(az, 3);
-  Serial.print(F(" | GYRO [dps] gx: ")); Serial.print(gx, 2);
-  Serial.print(F("  gy: "));            Serial.print(gy, 2);
-  Serial.print(F("  gz: "));            Serial.println(gz, 2);
-
-  delay(10); // ~100 Hz loop
+  Serial.println("");
+  delay(500);
   
 
 }
 
-/*
-
-Connection reminder:
-
-VCC → 3.3 V
-
-GND → GND
-
-SDA → GPIO21
-
-SCL → GPIO22
-
-AD0 → GND (0x68) or 3.3 V (0x69)
-
-
-
-
-*/
