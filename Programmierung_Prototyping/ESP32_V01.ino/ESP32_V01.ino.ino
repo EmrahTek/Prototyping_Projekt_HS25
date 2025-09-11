@@ -23,52 +23,53 @@ Adafruit_MPU6050 mpu;
 #endif
 
 // If AD0=GND -> 0x68, if AD0=3V3 -> 0x69
-//uint8_t MPU_ADDR = 0x68;   
+uint8_t MPU_ADDR = 0x68;   
 
 // FireBeetle ESP32 V4.0 LED + Hello World
 # define LED_PIN 2 // GPIO2 
 
 void setup() {
+  pinMode(LED_PIN, OUTPUT); 
   Serial.begin(115200);
-  while (!Serial)
-    delay(10); // will pause Zero, Leonardo, etc until serial console opens
+  delay(800);
+  Serial.println("\nBoot...");
+  Serial.println("\nMPU6050 init...");
+  for (int i=3; i>0; --i) { Serial.printf("Starting in %d...\n", i); delay(500); }
 
+
+  //Start I2C with explicit pins & 100kHz
+  Serial.println("\nI2C scan...");
+  Wire.begin(SDA_PIN, SCL_PIN, 100000);  
+  byte count=0;
+  for (byte addr=1; addr<127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission()==0) {
+      Serial.print("Found 0x"); if (addr<16) Serial.print('0');
+      Serial.println(addr, HEX); count++;
+    }
+    delay(4);
+  }
+  if(!count) Serial.println("No I2C devices found.");
+  
   Serial.println("Adafruit MPU6050 test!");
 
-  // Try to initialize!
-  if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
-    }
-  }
-  Serial.println("MPU6050 Found!");
-
-  pinMode(LED_PIN, OUTPUT);
-
-
-
-/*
-  //Start I2C with explicit pins & 400kHz
-  Wire.begin(SDA_PIN, SCL_PIN, 400000);
-
-  Serial.println("\nMPU6050 init...");
-
   // Try to initalize (Provide address & bus & i2c clock)
-  if (!mpu.begin(MPU_ADDR, &Wire, 400000)){
+  if (!mpu.begin(MPU_ADDR, &Wire, 100000)){
     Serial.println("Failed to find MPU6050 chip at 0x68. Trying 0x69...");
     // Fallback
     MPU_ADDR = 0x69;
-    if(!mpu.begin(MPU_ADDR, &Wire, 400000)){
-      Serial.println("MPU6050 nor found at 0x69. Check wiring & power. ");
+    if(!mpu.begin(MPU_ADDR, &Wire, 100000)){
+      Serial.println("MPU6050 not found at 0x69. Check wiring & power. ");
       // I2C scanner tipp:
-      Serial.println("Tipp: Run an I2C scanner to verify address.");
-      while(1){delay(1000);}
+      while(1){
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+        delay(200);
+      }
     }
-  } */
+  } 
 
- // Serial.print("MPU6050 Found at 0x");
-  // Serial.println(MPU_ADDR, HEX);
+  Serial.print("MPU6050 Found at 0x");
+  Serial.println(MPU_ADDR, HEX);
 
  // mpu.setAccelerometerRange(MPU6050_RANGE_8_G); //Acceleration range = sets how much g it can measure.
  //  mpu.setGyroRange(MPU6050_RANGE_500_DEG); // Gyroscope range = sets how fast it can measure turns.
@@ -122,12 +123,13 @@ void loop() {
   digitalWrite(LED_PIN, HIGH);
   Serial.println("Hello World - LED ON");
   delay(1000);
-
   // LED sön
   digitalWrite(LED_PIN, LOW);
   Serial.println("Hello World - LED OFF");
   delay(1000);
 
+  digitalWrite(LED_PIN, HIGH); delay(300);
+  digitalWrite(LED_PIN, LOW);  delay(300);
 
   /* Get new sensor events with the readings */
   sensors_event_t a, g, temp;
@@ -157,6 +159,5 @@ void loop() {
   Serial.println("");
   delay(500);
   
-
 }
 
