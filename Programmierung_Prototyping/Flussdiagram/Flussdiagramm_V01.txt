@@ -1,0 +1,30 @@
+SETUP
+├─ Start Serial/Logging
+├─ I2C (400 kHz)
+├─ IMU init? ── no → MODE=FAULT → ESC=NEUTRAL
+│ yes
+├─ ESC init + ARMED (neutral 2 s)
+└─ MODE = CALIBRATE
+
+LOOP @250 Hz
+├─ Deadline missed? → warning (log)
+├─ Read IMU (ax, ay, az, gx, gy, gz)
+├─ Data valid (finite_all)? no → MODE=FAULT
+├─ Acc tilt = atan2 + LPF
+├─ Gyro rate = (g-axis - bias) + LPF
+├─ Complementary filter → phi, phi_dot
+├─ Safety: |phi| > FAULT_ANGLE ? yes → MODE=FAULT
+├─ MODE ?
+│ ├─ CALIBRATE:
+│ │ collect gyro bias (CALIB_SECS) → compute avg bias → MODE=SWING_UP
+│ ├─ SWING_UP:
+│ │ energy-based control → u
+│ │ Saturation + RateLimit → wheel_cmd
+│ │ |phi| < STAB_ENTRY ? yes → MODE=STABILIZE
+│ ├─ STABILIZE:
+│ │ PID (p + i_antiwindup + d_LPF)
+│ │ Saturation + RateLimit + Deadband → wheel_cmd
+│ └─ FAULT:
+│ ESC = NEUTRAL
+├─ (Parallel task) ESC update @50 Hz → writeMicroseconds()
+└─ (Parallel task) Telemetry @LOG_HZ
