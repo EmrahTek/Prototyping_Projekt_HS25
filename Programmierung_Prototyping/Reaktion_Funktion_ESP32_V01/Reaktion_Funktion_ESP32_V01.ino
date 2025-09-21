@@ -68,14 +68,15 @@ int32_t vel_full_rotations = 0;   // vorheriger Umdrehungszähler für die Gesch
 
 //**********ESP32 ADC range***********
 int max_raw_count = 4095; // Maximalwert des 12 - Bit ADC
-int main_raw_count = 0;   // Minimalwert des ADC
+int min_raw_count = 0;   // Minimalwert des ADC
 
 // Calibration offsets structure
-struct ACCOffsetsObj {
+struct AccOffsetsObj {
   int     ID; // Kennung(zb 78 = gültige Kalibrierung)
   int16_t X;  // Offset für Beschleunigungssensor X-Achse
   int16_t Y;  // Offset für Beschleunigungssensor Y - Achse
 };
+
 AccOffsetsObj offsets; // Objekt, in dem die Werte gespeichert werden. 
 
 int16_t GyZ_offset = 0;  // Gyroskop-Z-Offset (nach Kalibrierung)
@@ -84,7 +85,7 @@ int32_t GyZ_offset_sum = 0; // Zwischensumme während der Offset-Berechnung
 float alpha = 0.40f;    // Filterkoeffizient für Tiefpass (Gyro-Glättung)
 float gyroZfilt = 0.0f; // gefilterter Gyroskopwert (Z-Achse)
 //alpha, gyroZfilt → Parameter für einen Tiefpassfilter: gyroZfilt = alpha*gyroZ + (1-alpha)*gyroZfilt. Glättet die Gyro-Messung.
-float robot_agle = 0.0f;  // berechneter Neigungswinkel des Roboters (aus Gyro + Acc)
+float robot_angle = 0.0f;  // berechneter Neigungswinkel des Roboters (aus Gyro + Acc)
 float Acc_angle = 0.0f;   // Winkel aus Accelerometer (arctan2)
 bool vertical = false;    // Statusflag: Roboter im vertikalen Bereich?
 bool calibrating = false; // Flag: Kalibrierung läuft gerade
@@ -102,7 +103,7 @@ static inline void beeOK(){
 }
 
 // Map microseconds 1000.. 2000 to LEDC duty at 50 Hz, 16-bit resolution
-void escWriteMicroseconds(uint16_t){
+void escWriteMicroseconds(uint16_t us){
   const uint32_t period_us = 2000UL;   // 50 Hz = 20 ms
   const uint32_t maxDuty = (1UL << ESC_RES_BITS) - 1UL; // 65535 // 1UL << ESC bedeutet 16 bit links verscheiben
   if(us < 500) us = 500; // safety clamp
@@ -127,7 +128,7 @@ void writeTo(uint8_t dev, uint8_t addr, uint8_t val){
   Wire.beginTransmission(dev); // I2C-Übertragung an Gerät mit Adresse 'dev' starten
   // addr → Registeradresse im Gerät (z. B. PWR_MGMT_1 = 0x6B)
   Wire.write(addr);           // Register-Adresse schicken
-  val → Wert, der in dieses Register geschrieben werden soll
+  //val → Wert, der in dieses Register geschrieben werden soll
   Wire.write(val);            // Wert 'val' an dieses Register schreiben
   Wire.endTransmission(true); // Übertragung beenden und Daten senden
 }
@@ -149,7 +150,7 @@ void angle_setup(){
     //quick read for bias estimation
     Wire.beginTransmission(MPU6050);
     Wire.write(0x47); // GYRO_ZOUT_H // Registerpointer auf GYRO_ZOUT_H (0x47) setzen
-    Wire.endTranmission(false);
+    Wire.endTransmission(false);
     Wire.requestFrom(MPU6050, (uint8_t)2, (uint8_t)true);
     int16_t gz = (Wire.read() << 8) | Wire.read();
     GyZ_offset_sum += gz;
@@ -158,8 +159,8 @@ void angle_setup(){
   }
   GyZ_offset = (int16_t)(GyZ_offset_sum >> 10);
 
-  beepOK();
-  Serila.print("GyZ offset value = ");
+  beeOK();
+  Serial.print("GyZ offset value = ");
   Serial.println(GyZ_offset);
 
 }
@@ -200,7 +201,7 @@ void angle_calc(){
 }
 
 //***************Baterry helpers (2S Lipo)*********
-float readBatteryVoltage{
+float readBatteryVoltage(){
   // Simple linear scale approach - CALIBRATE VBAT_SCALE!
    int raw = analogRead(PIN_VBAT);
    return raw * VBAT_SCALE;
@@ -243,7 +244,7 @@ void Motor_control(int pwm){
 
 }
 
-/ ------------ Serial live tuning ------------
+// ------------ Serial live tuning ------------
 void printValues() {
   Serial.print("K1: "); Serial.print(K1Gain);
   Serial.print(" K2: "); Serial.print(K2Gain);

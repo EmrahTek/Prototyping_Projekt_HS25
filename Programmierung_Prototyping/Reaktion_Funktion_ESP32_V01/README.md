@@ -2,10 +2,36 @@
 Autor:Emrah Tekin
 Date: 19.09.2025
 
+# ESP32 Reaktionsrad-Balancer auf Seil  
+**Mit THW-1060 ESC, MPU6050 (HW-123), RS-540, 2S LiPo**  
+
+## Hardware
+- **MCU:** FireBeetle ESP32 (DFR0478)  
+- **Sensor:** MPU6050 IMU (HW-123, I²C, Adresse 0x68)  
+- **ESC:** THW-1060 Regler (RC-Standard, 50 Hz, 1000–2000 µs)  
+- **Motor:** RS-540PH-7021  
+- **Akku:** 2S LiPo (z. B. 2200 mAh)  
+- // TO DO ->**Buzzer:** Signalisierung (Arming, Kalibrierung, Warnung)  
+- **VBAT-Messung:** Spannungsteiler → ESP32 ADC  
+
+**Wichtige Hinweise:**  
+- ESC-Signalpin muss ein **LEDC-fähiger GPIO** des ESP32 sein.  
+- **GND** des ESC, Akkus und ESP32 muss verbunden sein.  
+- MPU6050 benötigt **3.3 V Versorgung**.  
+
+
+## Überblick
+Dieses Projekt realisiert ein **Balance-System auf einem dünnen Seil** mit Hilfe eines **Reaktionsrades**.  
+Ein **ESP32 FireBeetle** liest die **IMU MPU6050** über I²C aus, fusioniert Gyroskop- und Beschleunigungsdaten mittels **Komplementärfilter** und steuert das **Reaktionsrad** über einen **THW-1060 ESC** an.  
+
+Die Stellgröße basiert auf einer **zustandsrückführungs-ähnlichen Regelung (LQR-inspiriert)** mit den Verstärkungen `K1..K4`. 
+
 LQR-Regelung im Projekt
 
 Dieses Projekt basiert auf dem in der Theorie-PDF „Linear Control of the Flywheel“ beschriebenen Ansatz 
 (vgl. Kapitel 4.1 State feedback stabilizing controller).
+
+
 
 ***************************Regelgesetz:**************************
 
@@ -46,37 +72,6 @@ Die Matrix K hängt von den Gewichtungen Q (Zustände) und R (Energieaufwand des
 Die im Code eingesetzten Werte wurden praktisch abgestimmt, entsprechen aber konzeptionell der im PDF vorgestellten LQR-Struktur.
 
 ***********************
-
-
-
-
-# ESP32 Reaktionsrad-Balancer auf Seil  
-**Mit THW-1060 ESC, MPU6050 (HW-123), RS-540, 2S LiPo**  
-
-## Überblick
-Dieses Projekt realisiert ein **Balance-System auf einem dünnen Seil** mit Hilfe eines **Reaktionsrades**.  
-Ein **ESP32 FireBeetle** liest die **IMU MPU6050** über I²C aus, fusioniert Gyroskop- und Beschleunigungsdaten mittels **Komplementärfilter** und steuert das **Reaktionsrad** über einen **THW-1060 ESC** an.  
-
-Die Stellgröße basiert auf einer **zustandsrückführungs-ähnlichen Regelung (LQR-inspiriert)** mit den Verstärkungen `K1..K4`.  
-
----
-
-## Hardware
-- **MCU:** FireBeetle ESP32 (DFR0478)  
-- **Sensor:** MPU6050 IMU (HW-123, I²C, Adresse 0x68)  
-- **ESC:** THW-1060 Regler (RC-Standard, 50 Hz, 1000–2000 µs)  
-- **Motor:** RS-540PH-7021  
-- **Akku:** 2S LiPo (z. B. 2200 mAh)  
-- **Buzzer:** Signalisierung (Arming, Kalibrierung, Warnung)  
-- **VBAT-Messung:** Spannungsteiler → ESP32 ADC  
-
-**Wichtige Hinweise:**  
-- ESC-Signalpin muss ein **LEDC-fähiger GPIO** des ESP32 sein.  
-- **GND** des ESC, Akkus und ESP32 muss verbunden sein.  
-- MPU6050 benötigt **3.3 V Versorgung**.  
-
----
-
 ## Softwarearchitektur
 
 ### Funktionsdatei
