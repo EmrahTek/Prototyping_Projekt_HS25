@@ -6,11 +6,11 @@
 #include <math.h>    // fabsf, atan2
 
 // ------------ MPU6050 ------------
-#define MPU6050       0x68
-#define ACCEL_CONFIG  0x1C
-#define GYRO_CONFIG   0x1B
-#define PWR_MGMT_1    0x6B
-#define PWR_MGMT_2    0x6C
+#define MPU6050       0x68 // I2C adresse
+#define ACCEL_CONFIG  0x1C //Hier stellst du die Empfindlichkeit des Beschleunigungssensors ein (±2g, ±4g, ±8g, ±16g).
+#define GYRO_CONFIG   0x1B // 0x1B (GYRO_CONFIG) → Hier stellst du die Gyro-Empfindlichkeit ein (±250, ±500, ±1000, ±2000 °/s)
+#define PWR_MGMT_1    0x6B //0x6B (PWR_MGMT_1) → Power-Management, z. B. Sleep-Mode ausschalten.
+#define PWR_MGMT_2    0x6C // 0x6C (PWR_MGMT_2) → Weitere Power-Optionen (einzelne Sensorachsen aktivieren/deaktivieren).
 
 // ------------ Pin mapping (adjust to your wiring) ------------
 const int PIN_I2C_SDA   = 21;   // ESP32 default
@@ -22,11 +22,11 @@ const int PIN_SENSOR    = 35;   // Analog angle sensor (ADC1, input-only)
 
 // ------------ LEDC for ESC (servo signal) ------------
 const int ESC_CH        = 0;        // LEDC channel
-const int ESC_FREQ_HZ   = 50;       // 50 Hz servo signal
+const int ESC_FREQ_HZ   = 50;       // 50 Hz servo signal ->PEriodendauer = 20 ms
 const int ESC_RES_BITS  = 16;       // 16-bit resolution (0..65535)
 
 // ------------ Control & sensor config ------------
-#define Gyro_amount   0.996f
+#define Gyro_amount   0.996f  //Gewichtungsfaktor für den Komplementärfilter
 const uint8_t accSens  = 0;   // 0=2g,1=4g,2=8g,3=16g
 const uint8_t gyroSens = 1;   // 0=250,1=500,2=1000,3=2000 dps
 
@@ -108,7 +108,7 @@ void escWriteMicroseconds(uint16_t us) {
   ledcWrite(ESC_CH, duty);
 }
 
-// ESC arming at neutral
+// ESC arming at neutral Electronik speed controller
 void escArmNeutral(uint16_t neutral_us = 1500, uint16_t ms_hold = 2000) {
   escWriteMicroseconds(neutral_us);
   delay(ms_hold);
@@ -169,9 +169,9 @@ void angle_calc() {
   GyZ = (Wire.read() << 8) | Wire.read();
 
   // Offsets & fusion
-  AcXc = AcX - offsets.X;
-  AcYc = AcY - offsets.Y;
-  GyZ  = GyZ - GyZ_offset;
+  AcXc = AcX - offsets.X; // kalibriertes Accel X
+  AcYc = AcY - offsets.Y; // kalibriertes Accel Y
+  GyZ  = GyZ - GyZ_offset; // bias-korrigiertes Gyro Z
 
   // integrate gyro (deg)
   robot_angle += ((float)GyZ * (loop_time / 1000.0f) / 65.536f);
@@ -240,10 +240,10 @@ void printValues() {
 int Tuning() {
   if (!Serial.available()) return 0;
   delay(2);
-  char param = Serial.read();
+  char param = Serial.read(); // Parameterbuchstabe lesen (z. B. 'p', 'i', 's', 'a', 'c')
   if (!Serial.available()) return 0;
-  char cmd = Serial.read();
-  Serial.flush();
+  char cmd = Serial.read(); // Befehl lesen ('+' oder '-')
+  Serial.flush();  // Eingabepuffer leeren
 
   switch (param) {
     case 'i':
