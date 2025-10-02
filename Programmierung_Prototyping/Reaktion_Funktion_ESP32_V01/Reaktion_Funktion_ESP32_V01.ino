@@ -11,6 +11,12 @@ Date: 18.09.2025
 #include <Wire.h>
 #include <EEPROM.h>
 #include <math.h>  
+#include "esp32-hal-ledc.h"
+
+#include <Arduino.h>
+#include <ESP32Servo.h>
+
+
 
 //******************MPU6050*************
 #define MPU6050       0x68 // I2C adresse
@@ -209,7 +215,7 @@ float readBatteryVoltage(){
 
 void battVoltageCheck(){
   // Typical 2S thresholds (tune for your cells/ESC);
-  const float WARN_V    = 7.20f;  //3.60 V / cell
+  const float WARN_V    = 7.50f;  //3.60 V / cell
   const float CRITICAL_V = 6.60f; // 3.30 V / cell
   float v = readBatteryVoltage();
 
@@ -250,6 +256,16 @@ void printValues() {
   Serial.print(" K2: "); Serial.print(K2Gain);
   Serial.print(" K3: "); Serial.print(K3Gain, 3);
   Serial.print(" K4: "); Serial.println(K4Gain);
+}
+
+
+ // Print a one-line help and a prompt. Keep it short.
+void tuningPromptOnce() {
+  static bool shown = false;
+  if (shown) return;
+  Serial.println("Tuning: p+/p- (K1), i+/i- (K2), s+/s- (K4), a+/a- (K3), c+/c- (cal)");
+  Serial.print("> ");               // simple prompt
+  shown = true;
 }
 
 int Tuning() {
@@ -311,6 +327,7 @@ int Tuning() {
       }
       break;
   }
+   
   return 1;
 }
 

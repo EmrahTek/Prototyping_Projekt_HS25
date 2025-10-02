@@ -6,6 +6,10 @@ Date:  19.09.2025
 
 #include <Wire.h>
 #include <EEPROM.h>
+#include "esp32-hal-ledc.h"
+#include <Arduino.h>
+#include <ESP32Servo.h>
+
 
 // Forward declarations from functions_esc.ino are not strictly needed in .ino sketches,
 // but we keep prototypes here for clarity when navigating.
@@ -13,9 +17,10 @@ void angle_setup();
 void angle_calc();
 void Motor_control(int pwm);
 int  Tuning();
-void escArmNeutral(uint16_t neutral_us = 1500, uint16_t ms_hold = 2000);
+void escArmNeutral(uint16_t neutral_us, uint16_t ms_hold );
 float getVelocity();
 void battVoltageCheck();
+void tuningPromptOnce();
 
 // Globals defined in functions_esc.ino (Arduino concatenates .ino tabs → shared)
 extern float alpha, gyroZfilt, robot_angle, loop_time, motor_speed_enc;
@@ -26,17 +31,24 @@ extern bool vertical, calibrating, calibrated;
 extern const int PIN_ESC_SIGNAL, PIN_BUZZ, PIN_VBAT, PIN_SENSOR;
 extern const int ESC_CH, ESC_FREQ_HZ, ESC_RES_BITS;
 
+Servo esc;
+
 void setup() {
   Serial.begin(115200);
-
+  esc.setPeriodHertz(50);
+  esc.attach(PIN_ESC_SIGNAL,1000,2000); //us limits
+  Serial.println("DEBUG: esc.attach executed");
+  esc.writeMicroseconds(1500);
+  Serial.println("DEBUG: esc.writeMicroseconds(1500) executed");
  // pinMode(PIN_BUZZ, OUTPUT);
  // digitalWrite(PIN_BUZZ, LOW);
 
   // ESC output: 50 Hz / 16-bit
-  ledcSetup(ESC_CH, ESC_FREQ_HZ, ESC_RES_BITS);
-  ledcAttachPin(PIN_ESC_SIGNAL, ESC_CH);
+  //ledcSetup(ESC_CH, ESC_FREQ_HZ, ESC_RES_BITS);
+  //ledcAttachPin(PIN_ESC_SIGNAL, ESC_CH);
   // Arm ESC at neutral
   escArmNeutral(1500, 2000);
+  Serial.println("DEBUG: escArmNeutral executed");
 
   // ADC config (optional fine tune)
   // analogReadResolution(12);       // default on ESP32 core
@@ -53,6 +65,11 @@ void setup() {
 
   // IMU init + gyro bias
   angle_setup();
+  Serial.println("DEBUG: angle_setup() executed")
+
+  tuningPromptOnce(); // Print a one-line help and a prompt. Keep it short.
+
+ 
 }
 
 void loop() {

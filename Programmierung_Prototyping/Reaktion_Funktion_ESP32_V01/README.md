@@ -22,7 +22,8 @@ Date: 19.09.2025
 
 ## Überblick
 Dieses Projekt realisiert ein **Balance-System auf einem dünnen Seil** mit Hilfe eines **Reaktionsrades**.  
-Ein **ESP32 FireBeetle** liest die **IMU MPU6050** über I²C aus, fusioniert Gyroskop- und Beschleunigungsdaten mittels **Komplementärfilter** und steuert das **Reaktionsrad** über einen **THW-1060 ESC** an.  
+Ein **ESP32 FireBeetle** liest die **IMU MPU6050** über I²C aus, fusioniert Gyroskop- und Beschleunigungsdaten mittels 
+**Komplementärfilter** und steuert das **Reaktionsrad** über einen **THW-1060 ESC** an.  
 
 Die Stellgröße basiert auf einer **zustandsrückführungs-ähnlichen Regelung (LQR-inspiriert)** mit den Verstärkungen `K1..K4`. 
 
