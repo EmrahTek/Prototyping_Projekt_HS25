@@ -12,12 +12,8 @@ Date: 18.09.2025
 #include <EEPROM.h>
 #include <math.h>  
 #include "esp32-hal-ledc.h"
-
 #include <Arduino.h>
 #include <ESP32Servo.h>
-
-
-
 //******************MPU6050*************
 #define MPU6050       0x68 // I2C adresse
 #define ACCEL_CONFIG  0x1C //Hier stellst du die Empfindlichkeit des Beschleunigungssensors ein (±2g, ±4g, ±8g, ±16g)
@@ -97,7 +93,6 @@ AccOffsetsObj offsets; // Objekt, in dem die Werte gespeichert werden.
 
 int16_t GyZ_offset = 0;  // Gyroskop-Z-Offset (nach Kalibrierung)
 int32_t GyZ_offset_sum = 0; // Zwischensumme während der Offset-Berechnung
-
 float alpha = 0.40f;    // Filterkoeffizient für Tiefpass (Gyro-Glättung)
 float gyroZfilt = 0.0f; // gefilterter Gyroskopwert (Z-Achse)
 //alpha, gyroZfilt → Parameter für einen Tiefpassfilter: gyroZfilt = alpha*gyroZ + (1-alpha)*gyroZfilt. Glättet die Gyro-Messung.
@@ -109,14 +104,6 @@ bool calibrated = false;  // Flag: Kalibrierung erfolgreich abgeschlossen
 
 //*****************Baterry scaling *************
 float VBAT_SCALE = 0.00400f;  // <-- PLACEHOLDER. Calibrate for your divider & ADC.
-
-// *********Wenn nötig ist Buzz************
-static inline void beeOK(){
-  digitalWrite(PIN_BUZZ, HIGH); delay(70);
-  digitalWrite(PIN_BUZZ, LOW); delay(80);
-  digitalWrite(PIN_BUZZ, HIGH); delay(70);
-  digitalWrite(PIN_BUZZ, LOW); 
-}
 
 // Map microseconds 1000.. 2000 to LEDC duty at 50 Hz, 16-bit resolution
 void escWriteMicroseconds(uint16_t us){
@@ -175,49 +162,14 @@ void angle_setup(){
   }
   GyZ_offset = (int16_t)(GyZ_offset_sum >> 10);
 
-  beeOK();
+  Serial.write(7);  // PC beep
   Serial.print("GyZ offset value = ");
   Serial.println(GyZ_offset);
 
 }
 
 //****************Read IMU + complementary filter***********
-/*
-void angle_calc(){
-  // Acc X, Y
-  Wire.beginTransmission(MPU6050);
-  Wire.write(0x3B); // ACCEL_XOUT_H
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU6050, (uint8_t)4, (uint8_t)true);
-  AcX = (Wire.read() << 8 | Wire.read());
-  AcY = (Wire.read() << 8 | Wire.read());
 
-  //Gyro Z
-  Wire.beginTransmission(MPU6050);
-  Wire.write(0x47);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU6050,(uint8_t)2, (uint8_t)true);
-  GyZ = (Wire.read() << 8 | Wire.read());
-
-  // offsets & fusion 
-  AcXc = AcX - offsets.X;
-  AcYc = AcY - offsets.Y;
-  GyZ =  GyZ - GyZ_offset;
-
-  // integrate gyro (deg)
-  robot_angle += ((float)GyZ * (loop_time / 1000.0f) / 65.536f);
-  // accel angle (deg)
-  Acc_angle = atan2((float)AcYc, (float)-AcXc) * 57.2958f;
-  // complementary filter
-  robot_angle = robot_angle * Gyro_amount + Acc_angle*(1.0f - Gyro_amount);
-
-  // vertical window with hysteresis
-  if(fabsf(robot_angle) > 6.0f) vertical = false;
-  if(fabsf(robot_angle) < 0.3f) vertical = true;
-  
-}
-
-*/
 int angle_calc_step(void)  // <-- yeni: status döndür
 {
   int status = 0;
@@ -294,9 +246,6 @@ int angle_calc_step(void)  // <-- yeni: status döndür
   if (status) imu_err_cnt++;
   return status;  // 0 ise her şey yolunda
 }
-
-
-
 //***************Baterry helpers (2S Lipo)*********
 float readBatteryVoltage(){
   // Simple linear scale approach - CALIBRATE VBAT_SCALE!
@@ -304,27 +253,31 @@ float readBatteryVoltage(){
    return raw * VBAT_SCALE;
 }
 
-void battVoltageCheck(){
+void battVoltageCheck(void){
   // Typical 2S thresholds (tune for your cells/ESC);
-  const float WARN_V    = 7.50f;  //3.60 V / cell
-  const float CRITICAL_V = 6.60f; // 3.30 V / cell
+  const float WARN_V     = 7.50f;  // ~3.60 V / cell
+  const float CRITICAL_V = 6.60f;  // ~3.30 V / cell
   float v = readBatteryVoltage();
 
-  // Simple beeper policy;
-  if(v <= CRITICAL_V){
-    digitalWrite(PIN_BUZZ, HIGH); delay(100);
-    digitalWrite(PIN_BUZZ, LOW);  delay(100);
-  }else if (v <= WARN_V) {
-    // slow beep on warn
-    digitalWrite(PIN_BUZZ, HIGH); delay(60);
-    digitalWrite(PIN_BUZZ, LOW);
-  } else {
-    digitalWrite(PIN_BUZZ, LOW);
+  if (v <= CRITICAL_V) {
+    // critical alarm: double beep
+    Serial.println("CRITICAL BATTERY!"); 
+    Serial.write(7); delay(100);
+    Serial.write(7); delay(100);
+  } 
+  else if (v <= WARN_V) {
+    // warning: single short beep
+    Serial.println("Battery Warning (low voltage)");
+    Serial.write(7);
+  } 
+  else {
+    // safe: no beep
   }
-  // Optional debug:
-  Serial.print("VBAT[V] = "); Serial.println(v, 2);
-}
 
+  // always print voltage for debugging
+  Serial.print("VBAT[V] = "); 
+  Serial.println(v, 2);
+}
 // ******************Motor control cia ESC (map -255...2555 to 1000...2000 us)****************
 
 void Motor_control(int pwm){
@@ -340,17 +293,7 @@ void Motor_control(int pwm){
   escWriteMicroseconds((uint16_t)us);
 
 }
-
-// ------------ Serial live tuning ------------
-void printValues() {
-  Serial.print("K1: "); Serial.print(K1Gain);
-  Serial.print(" K2: "); Serial.print(K2Gain);
-  Serial.print(" K3: "); Serial.print(K3Gain, 3);
-  Serial.print(" K4: "); Serial.println(K4Gain);
-}
-
-
- // Print a one-line help and a prompt. Keep it short.
+// Print a one-line help and a prompt. Keep it short.
 void tuningPromptOnce() {
   static bool shown = false;
   if (shown) return;
@@ -358,71 +301,7 @@ void tuningPromptOnce() {
   Serial.print("> ");               // simple prompt
   shown = true;
 }
-/*
-int Tuning() {
-  if (!Serial.available()) return 0;
-  delay(2);
-  char param = Serial.read();
-  if (!Serial.available()) return 0;
-  char cmd = Serial.read();
-  Serial.flush();
-  // p -> K1 (proportinale gain)
-  // i -> K2 (integral/gyro gain)
-  // s -> K4 (speed gain)
-  // a - > K3(angle correction)
-  // c -> calibration mod
-  switch (param) {
-    case 'i':
-      if (cmd == '+') K2Gain += 0.5f;
-      if (cmd == '-') K2Gain -= 0.5f;
-      printValues(); break;
-    case 'p':
-      if (cmd == '+') K1Gain += 1.0f;
-      if (cmd == '-') K1Gain -= 1.0f;
-      printValues(); break;
-    case 's':
-      if (cmd == '+') K4Gain += 1.0f;
-      if (cmd == '-') K4Gain -= 1.0f;
-      printValues(); break;
-    case 'a':
-      if (cmd == '+') K3Gain += 0.005f;
-      if (cmd == '-') K3Gain -= 0.005f;
-      printValues(); break;
-    case 'c':
-      if (cmd == '+' && !calibrating) {
-        calibrating = true;
-        Serial.println("calibrating on");
-      }
-      if (cmd == '-' && calibrating) {
-        Serial.println("calibrating off");
-        Serial.print("X: "); Serial.print(AcX + 16384);
-        Serial.print(" Y: "); Serial.println(AcY);
-        if (abs(AcY) < 3000) {
-          offsets.ID = 78;
-          offsets.X  = AcX + 16384;
-          offsets.Y  = AcY;
-          digitalWrite(PIN_BUZZ, HIGH); delay(70);
-          digitalWrite(PIN_BUZZ, LOW);
-          EEPROM.put(0, offsets);
-          EEPROM.commit();        // important on ESP32
-          calibrating = false;
-          calibrated  = true;
-        } else {
-          Serial.println("The angle are wrong!!!");
-          calibrating = false;
-          digitalWrite(PIN_BUZZ, HIGH); delay(50);
-          digitalWrite(PIN_BUZZ, LOW);  delay(70);
-          digitalWrite(PIN_BUZZ, HIGH); delay(50);
-          digitalWrite(PIN_BUZZ, LOW);
-        }
-      }
-      break;
-  }
-   
-  return 1;
-}
 
-*/
 int Tuning(void) {
   if (Serial.available() < 2) return 0;
 
