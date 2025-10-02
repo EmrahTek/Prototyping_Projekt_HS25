@@ -21,6 +21,8 @@ void escArmNeutral(uint16_t neutral_us, uint16_t ms_hold );
 float getVelocity();
 void battVoltageCheck();
 void tuningPromptOnce();
+int angle_calc_step(void);
+void printValues();
 
 // Globals defined in functions_esc.ino (Arduino concatenates .ino tabs → shared)
 extern float alpha, gyroZfilt, robot_angle, loop_time, motor_speed_enc;
@@ -74,7 +76,7 @@ void setup() {
 
   // IMU init + gyro bias
   angle_setup();
-  Serial.println("DEBUG: angle_setup() executed")
+  Serial.println("DEBUG: angle_setup() executed");
 
   tuningPromptOnce(); // Print a one-line help and a prompt. Keep it short.
 
@@ -157,7 +159,14 @@ void loop() {
 #endif
 
     Tuning();
-    angle_calc();
+    //angle_calc();
+    // Eski: angle_calc();
+    // Yeni: status al ve gerektiğinde kısa uyarı yaz
+    int imu_status = angle_calc_step();
+    if (imu_status) {
+    Serial.printf("IMU WARN: status=0x%02X (err_cnt=%lu)\n",
+                imu_status, (unsigned long)imu_err_cnt);
+  }
 
     {
       uint8_t active = (vertical && calibrated && !calibrating);
@@ -206,6 +215,8 @@ void loop() {
         motor_speed = 0;
       }
     }
+
+    printValues();
 
     t_ctrl = nowMs;
   }

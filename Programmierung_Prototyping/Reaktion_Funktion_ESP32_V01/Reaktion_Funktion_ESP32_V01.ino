@@ -24,7 +24,17 @@ Date: 18.09.2025
 #define GYRO_CONFIG   0x1B // 0x1B (GYRO_CONFIG) → Hier stellst du die Gyro-Empfindlichkeit ein (±250, ±500, ±1000, ±2000 °/s)
 #define PWR_MGMT_1    0x6B //0x6B (PWR_MGMT_1) → Power-Management, z. B. Sleep-Mode ausschalten.
 #define PWR_MGMT_2    0x6C // 0x6C (PWR_MGMT_2) → Weitere Power-Optionen (einzelne Sensorachsen aktivieren/deaktivieren)
+// --- Debug flags/vars (C-style) ---
+#define IMU_DEBUG          1
+#define IMU_BRIEF_PERIOD   200  // ms
 
+static uint32_t imu_last_brief = 0;
+static uint8_t  vertical_prev  = 255; // force first edge print
+static float    ang_min =  1e9f, ang_max = -1e9f;
+static uint32_t imu_err_cnt = 0;
+
+// Bitmaske (örnek): 1=I2C TX fail, 2=RX size fail, 4=NaN/Inf, 8=Clamped
+enum { IMU_ERR_TX=1, IMU_ERR_RX=2, IMU_ERR_NAN=4, IMU_ERR_CLAMP=8 };
 
 //************Pin mapping***************
 const int PIN_I2C_SDA  = 21; // ESP32 Default pin
@@ -172,6 +182,7 @@ void angle_setup(){
 }
 
 //****************Read IMU + complementary filter***********
+/*
 void angle_calc(){
   // Acc X, Y
   Wire.beginTransmission(MPU6050);
@@ -205,6 +216,86 @@ void angle_calc(){
   if(fabsf(robot_angle) < 0.3f) vertical = true;
   
 }
+
+*/
+int angle_calc_step(void)  // <-- yeni: status döndür
+{
+  int status = 0;
+
+  // ---- ACC X,Y ----
+  Wire.beginTransmission(MPU6050);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) status |= IMU_ERR_TX;
+
+  uint8_t n = Wire.requestFrom(MPU6050, (uint8_t)4, (uint8_t)true);
+  if (n != 4) status |= IMU_ERR_RX;
+  AcX = (Wire.read() << 8) | Wire.read();
+  AcY = (Wire.read() << 8) | Wire.read();
+
+  // ---- GYRO Z ----
+  Wire.beginTransmission(MPU6050);
+  Wire.write(0x47);
+  if (Wire.endTransmission(false) != 0) status |= IMU_ERR_TX;
+
+  n = Wire.requestFrom(MPU6050, (uint8_t)2, (uint8_t)true);
+  if (n != 2) status |= IMU_ERR_RX;
+  GyZ = (Wire.read() << 8) | Wire.read();
+
+  // ---- Offsets & Fusion ----
+  AcXc = AcX - offsets.X;
+  AcYc = AcY - offsets.Y;
+  GyZ  = GyZ - GyZ_offset;
+
+  // integrate gyro (deg)
+  robot_angle += ( (float)GyZ * (loop_time/1000.0f) / 65.536f );
+  // accel angle (deg)
+  Acc_angle = atan2((float)AcYc, (float)-AcXc) * 57.2958f;
+
+  // complementary filter
+  robot_angle = robot_angle * Gyro_amount + Acc_angle * (1.0f - Gyro_amount);
+
+  // NaN/Inf guard
+  if (!isfinite(robot_angle) || !isfinite(Acc_angle)) {
+    status |= IMU_ERR_NAN;
+    robot_angle = 0.0f;  // güvenli fallback
+  }
+
+  // optional clamp (ör. ±45°)
+  if (robot_angle > 45.0f) { robot_angle = 45.0f; status |= IMU_ERR_CLAMP; }
+  if (robot_angle < -45.0f){ robot_angle = -45.0f; status |= IMU_ERR_CLAMP; }
+
+  // vertical window with hysteresis (+ edge log)
+  {
+    uint8_t was = vertical;
+    if (fabsf(robot_angle) > 6.0f) vertical = 0;
+    if (fabsf(robot_angle) < 0.3f) vertical = 1;
+
+    if (IMU_DEBUG && vertical != vertical_prev) {
+      Serial.println(vertical ? "IMU: vertical=TRUE" : "IMU: vertical=FALSE");
+      vertical_prev = vertical;
+    }
+  }
+
+  // stats (min/max)
+  if (robot_angle < ang_min) ang_min = robot_angle;
+  if (robot_angle > ang_max) ang_max = robot_angle;
+
+  // rate-limited brief line (spam yok)
+  if (IMU_DEBUG) {
+    uint32_t now = millis();
+    if (now - imu_last_brief >= IMU_BRIEF_PERIOD) {
+      Serial.printf("IMU ang=%.2f acc=%.2f GyZ=%d AcXc=%d AcYc=%d\n",
+                    (double)robot_angle, (double)Acc_angle,
+                    (int)GyZ, (int)AcXc, (int)AcYc);
+      imu_last_brief = now;
+    }
+  }
+
+  if (status) imu_err_cnt++;
+  return status;  // 0 ise her şey yolunda
+}
+
+
 
 //***************Baterry helpers (2S Lipo)*********
 float readBatteryVoltage(){
