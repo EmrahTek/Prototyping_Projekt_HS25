@@ -16,7 +16,7 @@ Date:  19.09.2025
 void angle_setup();
 void angle_calc();
 void Motor_control(int pwm);
-int  Tuning();
+int  Tuning(void);
 void escArmNeutral(uint16_t neutral_us, uint16_t ms_hold );
 float getVelocity();
 void battVoltageCheck();
@@ -159,14 +159,17 @@ void loop() {
 #endif
 
     Tuning();
+    if(Tuning()){
+      Serial.println("Command processed."); //Komut islendi.
+    }
     //angle_calc();
     // Eski: angle_calc();
     // Yeni: status al ve gerektiğinde kısa uyarı yaz
     int imu_status = angle_calc_step();
-    if (imu_status) {
-    Serial.printf("IMU WARN: status=0x%02X (err_cnt=%lu)\n",
-                imu_status, (unsigned long)imu_err_cnt);
-  }
+    if (imu_status) 
+    {
+        Serial.printf("IMU WARN: status=0x%02X (err_cnt=%lu)\n",imu_status, (unsigned long)imu_err_cnt);
+    }
 
     {
       uint8_t active = (vertical && calibrated && !calibrating);

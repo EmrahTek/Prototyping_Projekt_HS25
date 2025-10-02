@@ -358,7 +358,7 @@ void tuningPromptOnce() {
   Serial.print("> ");               // simple prompt
   shown = true;
 }
-
+/*
 int Tuning() {
   if (!Serial.available()) return 0;
   delay(2);
@@ -421,6 +421,92 @@ int Tuning() {
    
   return 1;
 }
+
+*/
+int Tuning(void) {
+  if (Serial.available() < 2) return 0;
+
+  char param = (char)Serial.read();
+  char cmd   = (char)Serial.read();
+
+  if (param=='\r' || param=='\n') return 0;
+  if (cmd  =='\r' || cmd  =='\n') return 0;
+
+  #define CLAMP(v,lo,hi) do{ if((v)<(lo)) (v)=(lo); if((v)>(hi)) (v)=(hi); }while(0)
+
+  switch (param) {
+    case 'i':
+      if (cmd=='+') K2Gain += 0.5f;
+      else if (cmd=='-') K2Gain -= 0.5f;
+      CLAMP(K2Gain, 0.0f, 100.0f);
+      Serial.print("K2="); Serial.println(K2Gain, 2);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 'p':
+      if (cmd=='+') K1Gain += 1.0f;
+      else if (cmd=='-') K1Gain -= 1.0f;
+      CLAMP(K1Gain, 0.0f, 500.0f);
+      Serial.print("K1="); Serial.println(K1Gain, 2);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 's':
+      if (cmd=='+') K4Gain += 1.0f;
+      else if (cmd=='-') K4Gain -= 1.0f;
+      CLAMP(K4Gain, 0.0f, 200.0f);
+      Serial.print("K4="); Serial.println(K4Gain, 2);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 'a':
+      if (cmd=='+') K3Gain += 0.005f;
+      else if (cmd=='-') K3Gain -= 0.005f;
+      CLAMP(K3Gain, 0.0f, 1.0f);
+      Serial.print("K3="); Serial.println(K3Gain, 3);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 'c':
+      if (cmd=='+' && !calibrating) {
+        calibrating = true;
+        Serial.println("calibrating on"); 
+        Serial.write(7);  // PC beep
+        Serial.print("> ");
+      } else if (cmd=='-' && calibrating) {
+        Serial.println("calibrating off");
+        Serial.print("X: "); Serial.print(AcX + 16384);
+        Serial.print(" Y: "); Serial.println(AcY);
+        if (abs(AcY) < 3000) {
+          offsets.ID = 78; offsets.X = AcX + 16384; offsets.Y = AcY;
+          EEPROM.put(0, offsets); EEPROM.commit();
+          calibrating=false; calibrated=true;
+          Serial.println("offsets saved");
+          Serial.write(7);  // PC beep (success)
+          Serial.print("> ");
+        } else {
+          Serial.println("angle out of range");
+          calibrating=false;
+          // hata beep: 2 defa
+          Serial.write(7); delay(100); Serial.write(7);
+          Serial.print("> ");
+        }
+      } else {
+        Serial.println("use c+ to start, c- to stop"); 
+        Serial.print("> ");
+      }
+      break;
+
+    default:
+      Serial.println("unknown cmd. use p/i/s/a +/- or c +/-");
+      Serial.write(7);  // hata beep
+      Serial.print("> ");
+      break;
+  }
+
+  return 1;
+}
+
 
 // ------------ Angle sensor (analog potentiometer-like) ------------
 #define _2PI 6.28318530718f
