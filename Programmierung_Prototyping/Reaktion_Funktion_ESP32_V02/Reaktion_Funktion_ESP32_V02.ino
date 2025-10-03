@@ -1,0 +1,471 @@
+/* ========= functions_esc.ino =========
+ * Hardware: ESP32 + THW-1060 ESC + MPU6050 + 2S LiPo
+ * Author: Emrah Tekin (update with PC-beep + robust debug)
+ * Only ESP32Servo is used (no LEDC)
+ * Live tuning via Serial(p/i/s/a, c+/c-, m+/m-m f+/f-)
+ */
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <EEPROM.h>
+#include <math.h>  
+#include <ESP32Servo.h>
+#include "esp_task_wdt.h"
+
+
+//******************MPU6050 registers*************
+#define MPU6050       0x68 // I2C adresse
+#define ACCEL_CONFIG  0x1C //Hier stellst du die Empfindlichkeit des Beschleunigungssensors ein (±2g, ±4g, ±8g, ±16g)
+#define GYRO_CONFIG   0x1B // 0x1B (GYRO_CONFIG) → Hier stellst du die Gyro-Empfindlichkeit ein (±250, ±500, ±1000, ±2000 °/s)
+#define PWR_MGMT_1    0x6B //0x6B (PWR_MGMT_1) → Power-Management, z. B. Sleep-Mode ausschalten.
+#define PWR_MGMT_2    0x6C // 0x6C (PWR_MGMT_2) → Weitere Power-Optionen (einzelne Sensorachsen aktivieren/deaktivieren)
+
+
+//************Pin mapping***************
+const int PIN_I2C_SDA  = 21; // ESP32 Default pin
+const int PIN_I2C_SCL  = 22; // ESP32 default
+const int PIN_ESC_SIGNAL = 5; // LEDC capable pin for ESC signal
+const int PIN_BUZZ = 23; //// Buzzer (digital)
+const int PIN_VBAT = 34; // Battery sense (ADC1, input-only)
+const int PIN_SENSOR = 35;  // Analog angle sensor (ADC1, input-only)
+
+//***************LEDC for ESC (servo signal)*****************
+const int ESC_CH        = 0;    // LEDC channel
+const int ESC_FREQ_HZ   = 50;   // 50 Hz servo signal ->PEriodendauer = 20 ms
+const int ESC_RES_BITS  = 16;   // 16-bit resolution (0..65535)
+
+//**********Control & sensor config***************
+#define Gyro_amount   0.0996f  //Gewichtungsfaktor für den Komplementärfilter
+const uint8_t accSens   = 0;  // 0=2g,1=4g,2=8g,3=16g
+const uint8_t gyroSens  = 1;  // 0=250,1=500,2=1000,3=2000 dps
+
+//*******************Gains (state feedback-like)***********
+float K1Gain  = 175.0f; // Verstärkung für den WINKEL. Gross gewählt, weil die Hauptaufgabe ist, den Roboter wieder aufzurichten. 
+float K2Gain  = 16.0f;  // Verstärkung für die Drehgeschwindigkeit (Gyro). 
+float K3Gain  = 0.04f;  // Verstärkung für die Motorposition / integrierte Geschwindigkeit. "Sehr Klein, sorgt für langsame Korrektur lanfristiger Driffts."
+float K4Gain  = 13.0f;  //Verstärkung für die Radgeschwindigkeit. Mittelhoch, um schnelle Bewegungen auszugleichen, aber kleiner als K1.
+
+//****************Main loop step [ms]*****************
+float loop_time = 14.0f; // das entspricht einer Abtastfrequenz von ca. 125 Hz.
+//Wir Wollen den Regler schnell genug laufen lassen, damit der Roboter stabil bleibt.
+
+//*****************Runtime vars******************
+int pwmCMD = 0;   // aktueller PWM-Steuerwert für den ESC
+int32_t motor_speed = 0; // integrierte Geschwindigkeit / "Motorposition" crude control
+float motor_speed_enc = 0.0f;  // gemessene Motorgeschwindigkeit vom Encoder. [rad / s] from analog sensor
+
+int16_t AcX, AcY, AcXc, AcYc, GyZ, gyroZ; 
+// AcX, AcY   → rohe Beschleunigungswerte vom MPU6050 (X- und Y-Achse)
+// AcXc, AcYc → kalibrierte Beschleunigungswerte (Offset korrigiert)
+// GyZ        → roher Gyroskopwert (Z-Achse)
+// gyroZ      → skalierter Gyroskopwert in °/s (abhängig von gewählter Empfindlichkeit)
+
+float angle_prev = 0.0f;    // letzter gemessener Winkel (rad), für Differenzbildung
+float velocity = 0.0f;      // berechnete Winkelgeschwindigkeit (rad/s)
+long vel_angle_prev_ts = 0; // Zeitstempel (µs) der letzten Geschwindigkeitsberechnung
+float vel_angle_prev = 0.0f; // Winkel beim letzten Geschwindigkeits-Update
+int32_t full_rotations = 0;   // Anzahl kompletter Umdrehungen (Überlaufkorrektur)
+int32_t vel_full_rotations = 0;   // vorheriger Umdrehungszähler für die Geschwindigkeit
+
+//**********ESP32 ADC range***********
+int max_raw_count = 4095; // Maximalwert des 12 - Bit ADC
+int min_raw_count = 0;   // Minimalwert des ADC
+
+// Calibration offsets structure
+struct AccOffsetsObj {
+  int     ID; // Kennung(zb 78 = gültige Kalibrierung)
+  int16_t X;  // Offset für Beschleunigungssensor X-Achse
+  int16_t Y;  // Offset für Beschleunigungssensor Y - Achse
+};
+
+AccOffsetsObj offsets; // Objekt, in dem die Werte gespeichert werden. 
+
+int16_t GyZ_offset = 0;  // Gyroskop-Z-Offset (nach Kalibrierung)
+int32_t GyZ_offset_sum = 0; // Zwischensumme während der Offset-Berechnung
+float alpha = 0.40f;    // Filterkoeffizient für Tiefpass (Gyro-Glättung)
+float gyroZfilt = 0.0f; // gefilterter Gyroskopwert (Z-Achse)
+//alpha, gyroZfilt → Parameter für einen Tiefpassfilter: gyroZfilt = alpha*gyroZ + (1-alpha)*gyroZfilt. Glättet die Gyro-Messung.
+float robot_angle = 0.0f;  // berechneter Neigungswinkel des Roboters (aus Gyro + Acc)
+float Acc_angle = 0.0f;   // Winkel aus Accelerometer (arctan2)
+bool vertical = false;    // Statusflag: Roboter im vertikalen Bereich?
+bool calibrating = false; // Flag: Kalibrierung läuft gerade
+bool calibrated = false;  // Flag: Kalibrierung erfolgreich abgeschlossen
+
+//-----Force Active Bench test
+volatile uint8_t g_forceActive = 0; // f+ /f-
+
+// --- Debug flags/vars (C-style) ---
+#define IMU_DEBUG          1
+#define IMU_BRIEF_PERIOD   200  // ms
+
+static uint32_t imu_last_brief = 0;
+static uint8_t  vertical_prev  = 255; // force first edge print
+static float    ang_min =  1e9f, ang_max = -1e9f;
+static uint32_t imu_err_cnt = 0;
+volatile uint8_t g_showIMU = 1; // m+, m-
+
+
+
+// Bitmaske (örnek): 1=I2C TX fail, 2=RX size fail, 4=NaN/Inf, 8=Clamped
+enum { IMU_ERR_TX=1, IMU_ERR_RX=2, IMU_ERR_NAN=4, IMU_ERR_CLAMP=8 };
+
+// ----- Extern Servo instance (defined in main) -----
+class Servo;           // forward
+extern Servo esc;      // comes from main sketch
+
+
+//*****************Baterry scaling *************
+float VBAT_SCALE = 0.00400f;  // <-- PLACEHOLDER. Calibrate for your divider & ADC.
+
+/* ---------- Micros helpers ---------- */
+#define _2PI 6.28318530718f
+
+// ESC arming at neutral
+void escArmNeutral(uint16_t neutral_us = 1500, uint16_t ms_hold = 2000){
+  uint32_t t0 = millis();
+  bool once = false;
+  while (millis() - t0 < ms_hold){
+    esc.writeMicroseconds(neutral_us);
+    // host beep once at start
+    if (!once) { Serial.println("ESC neutral (arming)"); Serial.write(7); once = true; }
+    delay(50); // short chunk; main WDT reset should still run frequently
+    // If you use task WDT, you may also call esp_task_wdt_reset() here via weak extern.
+    // delay(ms_hold);
+  }
+}
+
+//Low-level I2C write
+void writeTo(uint8_t dev, uint8_t addr, uint8_t val){
+  //dev → I²C-Geräteadresse (z. B. 0x68 für MPU6050)
+  Wire.beginTransmission(dev); // I2C-Übertragung an Gerät mit Adresse 'dev' starten
+  // addr → Registeradresse im Gerät (z. B. PWR_MGMT_1 = 0x6B)
+  Wire.write(addr);           // Register-Adresse schicken
+  //val → Wert, der in dieses Register geschrieben werden soll
+  Wire.write(val);            // Wert 'val' an dieses Register schreiben
+  Wire.endTransmission(true); // Übertragung beenden und Daten senden
+}
+
+//**************IMU init & gyro bias *****************
+void angle_setup(){
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setClock(400000);
+  delay(100);
+
+  writeTo(MPU6050, PWR_MGMT_1, 0); // wake up  // Sleep aus, interner Takt (CLKSEL=0)
+  // ACCEL_CONFIG = accSens<<3 wählt ±2/4/8/16 g, GYRO_CONFIG = gyroSens<<3 wählt ±250/500/1000/2000 °/s (FS_SEL Bits)
+  writeTo(MPU6050, ACCEL_CONFIG, (accSens << 3)); // accel FS // ACCEL_FS_SEL Bits [4:3] nach Datenblatt
+  writeTo(MPU6050, GYRO_CONFIG, (gyroSens << 3)); // gyro FS // GYRO_FS_SEL  Bits [4:3]
+  delay(100);
+
+  GyZ_offset_sum = 0;
+  for (int i=0; i < 1024; i++){
+    //quick read for bias estimation
+    Wire.beginTransmission(MPU6050);
+    Wire.write(0x47); // GYRO_ZOUT_H // Registerpointer auf GYRO_ZOUT_H (0x47) setzen
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU6050, (uint8_t)2, (uint8_t)true);
+    int16_t gz = (Wire.read() << 8) | Wire.read();
+    GyZ_offset_sum += gz;
+    delay(5);
+
+  }
+  GyZ_offset = (int16_t)(GyZ_offset_sum >> 10);
+
+  Serial.write(7);  // PC beep
+  Serial.print("GyZ offset value = ");
+  Serial.println(GyZ_offset);
+  Serial.write(7); // PC beep
+
+}
+
+//****************Read IMU + complementary filter***********
+
+int angle_calc_step(void)  // <-- yeni: status döndür
+{
+  int status = 0;
+
+  // ---- ACC X,Y ----
+  Wire.beginTransmission(MPU6050);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) status |= IMU_ERR_TX;
+
+  uint8_t n = Wire.requestFrom(MPU6050, (uint8_t)4, (uint8_t)true);
+  if (n != 4) status |= IMU_ERR_RX;
+  AcX = (Wire.read() << 8) | Wire.read();
+  AcY = (Wire.read() << 8) | Wire.read();
+
+  // ---- GYRO Z ----
+  Wire.beginTransmission(MPU6050);
+  Wire.write(0x47);
+  if (Wire.endTransmission(false) != 0) status |= IMU_ERR_TX;
+  n = Wire.requestFrom(MPU6050, (uint8_t)2, (uint8_t)true);
+  if (n != 2) status |= IMU_ERR_RX;
+  GyZ = (Wire.read() << 8) | Wire.read();
+
+  // ---- Offsets & Fusion ----
+  AcXc = AcX - offsets.X;
+  AcYc = AcY - offsets.Y;
+  GyZ  = GyZ - GyZ_offset;
+
+  // integrate gyro (deg)
+  robot_angle += ( (float)GyZ * (loop_time/1000.0f) / 65.536f );
+  // accel angle (deg)
+  Acc_angle = atan2((float)AcYc, (float)-AcXc) * 57.2958f;
+
+  // complementary filter
+  robot_angle = robot_angle * Gyro_amount + Acc_angle * (1.0f - Gyro_amount);
+
+  // NaN/Inf guard
+  if (!isfinite(robot_angle) || !isfinite(Acc_angle)) {
+    status |= IMU_ERR_NAN;
+    robot_angle = 0.0f;  // güvenli fallback
+  }
+
+  // optional clamp (ör. ±45°)
+  if (!isfinite(robot_angle) || !isfinite(Acc_angle)) { status |= IMU_ERR_NAN; robot_angle = 0.0f; }
+  if (robot_angle > 45.0f) { robot_angle = 45.0f; status |= IMU_ERR_CLAMP; }
+  if (robot_angle < -45.0f){ robot_angle = -45.0f; status |= IMU_ERR_CLAMP; }
+
+  // vertical window with hysteresis (+ edge log)
+  
+    bool v_prev = vertical;
+    if (fabsf(robot_angle) > 8.0f) vertical = false; // obere Schwelle
+    if (fabsf(robot_angle) < 2.0f) vertical = true; // untere Schwelle
+    if (vertical != v_prev) Serial.println(vertical ? "IMU: vertical=TRUE" : "IMU: vertical=FALSE");
+  
+  // stats (min/max)
+  if (robot_angle < ang_min) ang_min = robot_angle;
+  if (robot_angle > ang_max) ang_max = robot_angle;
+
+  // rate-limited brief line (spam yok)
+  uint32_t now = millis();
+  if (IMU_DEBUG) {
+    uint32_t now = millis();
+    if (g_showIMU && now - imu_last_brief >= IMU_BRIEF_PERIOD) {
+      Serial.printf("IMU ang=%.2f acc=%.2f GyZ=%d AcXc=%d AcYc=%d\n",
+                    (double)robot_angle, (double)Acc_angle,
+                    (int)GyZ, (int)AcXc, (int)AcYc);
+      imu_last_brief = now;
+    }
+  }
+
+  if (status) imu_err_cnt++;
+  return status;  // 0 ise her şey yolunda
+}
+
+//***************Baterry helpers (2S Lipo)*********
+float readBatteryVoltage(){
+  // Simple linear scale approach - CALIBRATE VBAT_SCALE!
+   int raw = analogRead(PIN_VBAT);
+   return raw * VBAT_SCALE;
+}
+
+void battVoltageCheck(void){
+  // Typical 2S thresholds (tune for your cells/ESC);
+  const float WARN_V     = 7.50f;  // ~3.60 V / cell
+  const float CRITICAL_V = 6.60f;  // ~3.30 V / cell
+  float v = readBatteryVoltage();
+
+  if (v <= CRITICAL_V) {
+    // critical alarm: double beep
+    Serial.println("CRITICAL BATTERY!"); 
+    Serial.write(7); delay(100);
+    Serial.write(7); delay(100);
+  } 
+  else if (v <= WARN_V) {
+    // warning: single short beep
+    Serial.println("Battery Warning (low voltage)");
+    Serial.write(7);
+  } 
+  else {
+    // safe: no beep
+  }
+
+  // always print voltage for debugging
+  Serial.print("VBAT[V] = "); 
+  Serial.println(v, 2);
+}
+// ******************Motor control cia ESC (map -255...2555 to 1000...2000 us)****************
+
+void Motor_control(int pwm){
+  //deadband to avoid jitter
+  const int dead = 12;
+  if(abs(pwm) < dead) pwm = 0;
+
+  // Map to us around 1500
+  int us = 1500 + (int)((float)pwm * (500.0f / 255.0f)); // +/- 500 us span
+  if (us < 1000) us = 1000;
+  if (us > 2000) us = 2000;
+
+  //escWriteMicroseconds((uint16_t)us);
+  // yeni (Servo’yu kullan):
+  esc.writeMicroseconds((uint16_t)us);
+
+}
+
+
+
+/* ================== Serial live tuning ================== */
+static void printValues(void){
+  Serial.print("K1: "); Serial.print(K1Gain);
+  Serial.print(" K2: "); Serial.print(K2Gain);
+  Serial.print(" K3: "); Serial.print(K3Gain, 3);
+  Serial.print(" K4: "); Serial.println(K4Gain);
+}
+
+
+// Print a one-line help and a prompt. Keep it short.
+void tuningPromptOnce() {
+  static bool shown = false;
+  if (shown) return;
+  Serial.println("Tuning: p+/p- (K1), i+/i- (K2), s+/s- (K4), a+/a- (K3), c+/c- (cal)");
+  Serial.print("> ");               // simple prompt
+  shown = true;
+}
+
+/* Clamp helper macro */
+#define CLAMP(v,lo,hi) do{ if((v)<(lo)) (v)=(lo); if((v)>(hi)) (v)=(hi); }while(0)
+
+
+int Tuning(void) {
+  if (Serial.available() < 2) return 0;
+
+  char param = (char)Serial.read();
+  char cmd   = (char)Serial.read();
+
+  if (param=='\r' || param=='\n') return 0;
+  if (cmd  =='\r' || cmd  =='\n') return 0;
+
+  
+  switch (param) {
+    case 'i':
+      if (cmd=='+') K2Gain += 0.5f;
+      else if (cmd=='-') K2Gain -= 0.5f;
+      CLAMP(K2Gain, 0.0f, 100.0f);
+      Serial.print("K2="); Serial.println(K2Gain, 2);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 'p':
+      if (cmd=='+') K1Gain += 1.0f;
+      else if (cmd=='-') K1Gain -= 1.0f;
+      CLAMP(K1Gain, 0.0f, 500.0f);
+      Serial.print("K1="); Serial.println(K1Gain, 2);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 's':
+      if (cmd=='+') K4Gain += 1.0f;
+      else if (cmd=='-') K4Gain -= 1.0f;
+      CLAMP(K4Gain, 0.0f, 200.0f);
+      Serial.print("K4="); Serial.println(K4Gain, 2);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 'a':
+      if (cmd=='+') K3Gain += 0.005f;
+      else if (cmd=='-') K3Gain -= 0.005f;
+      CLAMP(K3Gain, 0.0f, 1.0f);
+      Serial.print("K3="); Serial.println(K3Gain, 3);
+      printValues(); Serial.print("> "); 
+      break;
+
+    case 'c':
+      if (cmd=='+' && !calibrating) {
+        calibrating = true;
+        Serial.println("calibrating on"); 
+        Serial.write(7);  // PC beep
+        Serial.print("> ");
+      } else if (cmd=='-' && calibrating) {
+        Serial.println("calibrating off");
+        Serial.print("X: "); Serial.print(AcX + 16384);
+        Serial.print(" Y: "); Serial.println(AcY);
+        if (abs(AcY) < 3000) {
+          offsets.ID = 78; offsets.X = AcX + 16384; offsets.Y = AcY;
+          EEPROM.put(0, offsets); EEPROM.commit();
+          calibrating=false; calibrated=true;
+          Serial.println("offsets saved");
+          Serial.write(7);  // PC beep (success)
+          Serial.print("> ");
+        } else {
+          Serial.println("angle out of range");
+          calibrating=false;
+          // hata beep: 2 defa
+          Serial.write(7); delay(100); Serial.write(7);
+          Serial.print("> ");
+        }
+      } else {
+        Serial.println("use c+ to start, c- to stop"); 
+        Serial.print("> ");
+      }
+      break;
+
+    case 'm':
+      if (cmd=='+') g_showIMU=1; 
+      else if (cmd=='-') g_showIMU=0;
+      Serial.print("IMU print = "); 
+      Serial.println(g_showIMU?"ON":"OFF");
+      Serial.print("> "); 
+      break;
+
+
+    case 'f':   // force active toggle
+      if (cmd=='+') g_forceActive = true;
+        else if (cmd=='-') g_forceActive = false;
+        Serial.print("ForceActive = ");
+        Serial.println(g_forceActive ? "ON" : "OFF");
+        Serial.print("> ");
+      break;
+
+
+    default:
+      Serial.println("unknown cmd. use p/i/s/a +/- or c +/-");
+      Serial.write(7);  // hata beep
+      Serial.print("> ");
+      break;
+  }
+
+  return 1;
+}
+
+
+
+
+// ------------ Angle sensor (analog potentiometer-like) ------------
+
+float getSensorAngle(void) 
+{
+  int raw = analogRead(PIN_SENSOR);
+  int cpr = (max_raw_count - min_raw_count);
+  if (cpr <= 0) cpr = 1;
+  return ((float)(raw - min_raw_count) / (float)cpr) * _2PI;
+}
+
+// Angular velocity [rad/s] from successive angle reads
+float getVelocity() 
+{
+  float val = getSensorAngle();
+  long  ts  = micros();
+  float d_angle = val - vel_angle_prev;
+
+  // unwrap across 0..2π
+  if (fabsf(d_angle) > (0.8f * _2PI)) full_rotations += (d_angle > 0) ? -1 : 1;
+
+  float Ts = (ts - vel_angle_prev_ts) * 1e-6f;
+  if (Ts <= 0.0f) Ts = 1e-6f;
+
+  velocity = ((float)(full_rotations - vel_full_rotations) * _2PI
+              + (val - vel_angle_prev)) / Ts;
+
+  // simple LPF to stabilize encoder speed (optional)
+  static float w_f = 0.0f;
+  float beta = 0.2f; // 0..1 (smaller = stronger filtering)
+  w_f = w_f + beta * (velocity - w_f);
+
+  vel_angle_prev     = val;
+  vel_full_rotations = full_rotations;
+  vel_angle_prev_ts  = ts;
+
+  return w_f;  // filtered wheel speed [rad/s]
+}
+
